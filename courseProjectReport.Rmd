@@ -1,0 +1,118 @@
+---
+title: "PracticalMLCourseProject"
+author: "Daria Efimova"
+date: "8/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview and Explotatory data analysis
+
+This is the report for Practical machine learning course project. In this project, I will use a data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants from the project come from this source: http://groupware.les.inf.puc-rio.br/har. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. My goal of this project is to predict the manner in which they did the exercise. 
+
+First let's get training datasets out of the .csv files from the internet links and split it to the training and testing subsets:
+
+```{r, echo=TRUE, cache=TRUE}
+library(RCurl)
+library(caret)
+library(ggplot2)
+trainingDataFile <- getURL('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv', ssl.verifyhost=FALSE, ssl.verifypeer=FALSE)
+data <- read.csv(textConnection(trainingDataFile), header=T)
+inTrain <- createDataPartition(y=data$classe,p=0.7, list=FALSE)
+trainingData <- data[inTrain,]; 
+testingData <- data[-inTrain,]
+```
+
+This training dataset consist of 160 variables in 19622 observations about different characteristics of human activities. 
+
+## Cleaning of the data 
+
+Before building models, let's first remove from dataset  unnecessary variables  (since they won't make a lot of sense in the model). It could be near zero variables,  variables with 95% empty or NA values or variables which doesn't make sense like user_name or different type of timestamps: 
+
+```{r, echo=TRUE, cache=TRUE}
+trainingDataFiltered <- trainingData[, -which(names(trainingData) %in% c("X","user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp","new_window"))]
+
+nearZeroVarIndex <- nearZeroVar(trainingDataFiltered)
+trainingDataFiltered <- trainingDataFiltered[, -nearZeroVarIndex]
+
+trainingDataFiltered <- trainingDataFiltered[, colSums(is.na(trainingDataFiltered)) < nrow(trainingDataFiltered) * 0.5]
+```
+
+After cleaning the data we have 53 variables and all of them are numerical.
+
+We have a lot of variables and it would take a lot of time to build model for each of ML algorithm we want to try, let's use only variables represented data from accelerometers on the belt, forearm, arm, and dumbell:
+
+```{r, echo=TRUE, cache=TRUE}
+data <- data.frame(trainingDataFiltered[, grepl( "^accel_" , names(trainingDataFiltered))])
+data$num_window <- trainingDataFiltered$num_window
+data$classe <- factor(trainingDataFiltered$classe)
+str(data)
+```
+
+Next step is trying to find any correlation between this variables (since we want them to be independent):
+```{r, echo=TRUE, cache=TRUE}
+correlationMatrix <- cor(data[1:12])
+findCorrelation(correlationMatrix)
+```
+
+We can see here that we have only 2 strongly correlated variables, so we can remove one of them to make our set of predictors being more independent.
+
+```{r, echo=TRUE, cache=TRUE}
+data <- data[, -1*findCorrelation(correlationMatrix)]
+```
+
+Now let's do the same for our "in sample" test subset:
+
+```{r, echo=TRUE, cache=TRUE}
+testdata <- data.frame(testingData[, grepl( "^accel_" , names(testingData))])
+testdata$num_window <- testingData$num_window
+testdata$classe <- factor(testingData$classe)
+correlationMatrix <- cor(testdata[1:12])
+testdata <- testdata[, -1*findCorrelation(correlationMatrix)]
+```
+## Model building
+
+Let's try to build a prediction model for __classe__ variable using few ML algorithms: CATR (prediction with trees), treebag (bagging) and random forest. For each model we will build confusion matrix to get accurate value and p-value. If p-value would < 0.05, it would means that we can say that accuracy value > no rate information value so it make sense using our model for prediction. We use k-fold cross-validation with k = 5 for every method to prevent bias and make better model.
+
+```{r, echo=TRUE, cache=TRUE}
+set.seed(51)
+modelRPART <- train(classe ~ .,data = data, method = 'rpart', trControl = trainControl(method = 'cv', number = 5))
+predictionRPART <- predict(modelRPART, newdata = testingData)
+confusionMatrix(factor(testingData$classe), predictionRPART)$overall
+
+modelTreeBag <- train(classe ~ .,data = data, method = 'treebag', trControl = trainControl(method = 'cv', number = 5))
+predictionTreeBag <- predict(modelTreeBag, newdata = testingData)
+confusionMatrix(factor(testingData$classe), predictionTreeBag)$overall
+
+modelRF <- train(classe ~ .,data = data, method = 'rf', trControl = trainControl(method = 'cv', number = 5))
+predictionRF <- predict(modelRF, newdata = testingData)
+confusionMatrix(factor(testingData$classe), predictionRF)$overall
+```
+
+From the results above we can see that accuracy of CART = 68%, it's quite small value, so we should take a look at another 2 algorithms. __treeBag__ shows 99.3% accuracy for training sample and random forest has accuracy = 99.8%. It look like random forest made the best prediction model for our data.
+
+Now let's calculate expected out of sample classification error of our model:
+
+```{r, echo=TRUE, cache=TRUE}
+sum(factor(testingData$classe) != predictionRF)/length(predictionRF)
+```
+
+So expected out of sample classification error of our model is 0.1%.
+
+Now let's get testing dataset out of the internet link, made all same transformation we did with traning dataset and test our model on the testing dataset:
+
+```{r, echo=TRUE, cache=TRUE}
+testDataFile <- getURL('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv',
+ssl.verifyhost=FALSE, ssl.verifypeer=FALSE)
+data <- read.csv(textConnection(testDataFile), header=T)
+
+testingData <- data.frame(data[, grepl( "^accel_" , names(data))])
+testingData$num_window <- data$num_window
+str(testingData)
+
+predictionRF <- predict(modelRF, newdata = testingData)
+predictionRF
+```
